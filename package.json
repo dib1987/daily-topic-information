@@ -1,0 +1,25 @@
+{
+  "name": "phase3-automation",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev:trigger": "npx trigger.dev@latest dev",
+    "deploy:trigger": "npx trigger.dev@latest deploy",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.99.0",
+    "@mendable/firecrawl-js": "^4.25.0",
+    "@trigger.dev/sdk": "4.4.6",
+    "googleapis": "^172.0.0"
+  },
+  "devDependencies": {
+    "@trigger.dev/build": "4.4.6",
+    "typescript": "^6.0.3"
+  }
+}
