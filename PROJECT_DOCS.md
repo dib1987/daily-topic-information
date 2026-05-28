@@ -5,16 +5,17 @@
 
 ## What Is This Project? (The Simple Version)
 
-Every morning, this system wakes up on its own, reads the latest AI news and stock market updates from the internet, asks Claude AI to summarize what matters, and writes a clean report into a Google Sheet — all without you doing anything.
+Every morning, this system wakes up on its own, reads the latest AI news and stock market updates from the internet, asks Claude AI to summarize what matters, writes a clean report into a Google Sheet, and emails the report directly to your inbox — all without you doing anything.
 
 Think of it like hiring a research assistant who:
 - Wakes up at 12:30 PM IST every day
 - Reads dozens of news articles
 - Picks out what's important
 - Writes a summary in your notebook
+- Emails it to you
 - Goes back to sleep
 
-You just open the Google Sheet and the work is already done.
+You just check your inbox (or open the Google Sheet) and the work is already done.
 
 ---
 
@@ -61,13 +62,23 @@ Every day at 07:00 UTC (12:30 PM IST)
 │  Append one row:            │
 │  Date | News | Stocks |     │
 │  Sources | Status           │
+└─────────────┬───────────────┘
+              │ Always runs — even on failure.
+              ▼
+┌─────────────────────────────┐
+│  STEP 4 — Send Email        │
+│  HTML email to your inbox:  │
+│  • AI News section          │
+│  • Stock Opportunities      │
+│  • Source links             │
+│  • Pipeline status footer   │
 └─────────────────────────────┘
               │
               ▼
         Done. Every day.
 ```
 
-**Important design decision:** If Step 1 fails, Step 2 is skipped. But Step 3 always runs — even if everything failed, it writes a row saying "failed" so you have a record. The task never crashes.
+**Important design decision:** If Step 1 fails, Step 2 is skipped. But Steps 3 and 4 always run — even if everything failed, you still get a row in the sheet and an email saying what went wrong. The task never crashes silently.
 
 ---
 
@@ -134,8 +145,32 @@ Every day at 07:00 UTC (12:30 PM IST)
 
 ---
 
-### 4. Google Sheets API (googleapis)
-**What it is:** The notebook. Every day's research gets stored as one new row.
+### 4. Nodemailer + Gmail SMTP
+**What it is:** Sends the daily report as a formatted HTML email directly to your inbox.
+
+**Why we used it (and not Gmail API or Resend/SendGrid):**
+- Gmail API via `googleapis` requires Google Workspace domain delegation — won't work with a personal Gmail account
+- Resend and SendGrid require creating a new account with a new service
+- Nodemailer + Gmail App Password works with any Gmail account, zero new signups, just 2 env vars
+
+**How authentication works:**
+- Enable 2-Step Verification on your Google account
+- Generate a 16-character App Password at myaccount.google.com → Security → App passwords
+- Store it as `GMAIL_APP_PASSWORD` in your env vars (no spaces)
+- Nodemailer handles the rest — no OAuth flow, no browser login
+
+**Email output:**
+- Subject: `[Complete] AI Research Report — 2026-05-28` (status badge changes color)
+- Dark gradient header with date and green/amber/red status badge
+- AI News Today section
+- AI Stock Opportunities section
+- Source URLs as clickable links
+- Pipeline status footer showing which steps passed/failed
+
+---
+
+### 5. Google Sheets API (googleapis)
+**What it is:** The permanent record. Every day's research gets stored as one new row, queryable and filterable forever.
 
 **Why we used it:**
 - You already use Google Sheets — no new tool to learn
@@ -151,7 +186,7 @@ Every day at 07:00 UTC (12:30 PM IST)
 
 ---
 
-### 5. TypeScript + Node.js
+### 6. TypeScript + Node.js
 **What it is:** The programming language the task is written in.
 
 **Why:** Trigger.dev is TypeScript-native. Strong typing catches bugs before they reach production. The entire codebase is already TypeScript.
@@ -181,9 +216,14 @@ RSS feeds are free, fast, reliable, and require zero authentication. For news ag
 **Lesson:** Before reaching for a paid scraping API, check if the site publishes an RSS feed.
 
 ### 5. Individual error handling per step beats one big try/catch
-Wrapping every step in its own try/catch means a Claude API timeout won't prevent the sheet from getting a row. Partial data is more useful than silence.
+Wrapping every step in its own try/catch means a Claude API timeout won't prevent the sheet from getting a row or the email from sending. Partial data is more useful than silence.
 
-**Lesson:** Design tasks to always produce output, even when they partially fail. A row that says "failed" is more useful than no row.
+**Lesson:** Design tasks to always produce output, even when they partially fail. A row that says "failed" and an email that says "partial run" are both more useful than nothing.
+
+### 6. Gmail API ≠ Nodemailer for personal Gmail
+We tried the `googleapis` Gmail API first — it requires Google Workspace domain-wide delegation to send as a personal Gmail address. That's only available on paid Google Workspace accounts.
+
+**Lesson:** For personal Gmail sending in automation, Nodemailer + App Password is the right tool. The Gmail API is for enterprise setups.
 
 ---
 
@@ -206,19 +246,26 @@ PHASE3-AUTOMATION/
 
 | Variable | What it is | Where to get it |
 |----------|-----------|-----------------|
-| `TRIGGER_SECRET_KEY` | Trigger.dev auth | trigger.dev dashboard |
+| `TRIGGER_SECRET_KEY` | Trigger.dev auth | trigger.dev dashboard (auto-set in dev) |
 | `ANTHROPIC_API_KEY` | Claude API key | console.anthropic.com |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | Google bot credentials | Google Cloud Console |
-| `GOOGLE_SHEET_ID` | ID from the sheet URL | Copy from Google Sheets URL |
+| `GOOGLE_SHEET_ID` | `1ahOtDIkO1oA5SJ8EgxUI1AEJGQI_uOMwcpEwGt_wF0Q` | Already known |
+| `GMAIL_USER` | Gmail address that sends the report | Your Gmail address |
+| `GMAIL_APP_PASSWORD` | 16-char App Password (no spaces) | myaccount.google.com → Security → App passwords |
+| `NOTIFY_EMAIL` | Email address that receives the report | Your email address |
 
 ---
 
 ## Pending Steps Before Going Fully Live
 
-1. **Add env vars to Trigger.dev Cloud** (dashboard → Environment Variables)
+1. **Add env vars to Trigger.dev Cloud** (dashboard → Environment Variables) — CRITICAL, blocks deployment
    - `ANTHROPIC_API_KEY`
-   - `GOOGLE_SERVICE_ACCOUNT_JSON`
+   - `GOOGLE_SERVICE_ACCOUNT_JSON` (paste the full JSON as one line)
    - `GOOGLE_SHEET_ID`
+   - `GMAIL_USER`
+   - `GMAIL_APP_PASSWORD` (16 chars, no spaces)
+   - `NOTIFY_EMAIL`
+   - Note: `TRIGGER_SECRET_KEY` is NOT needed in the dashboard
 
 2. **Deploy:** run `npm run deploy:trigger`
    - After this, the task runs on Trigger.dev's servers every day at 07:00 UTC
@@ -247,8 +294,11 @@ npm run dev:trigger
 | Row says "failed" | Trigger.dev → Runs → click run ID → read step1 logs | RSS feed URL changed, replace it |
 | Row says "partial" | Same logs, check step2 | Claude API key expired or quota hit |
 | No row at all | Check step3 logs | Google Sheet ID wrong or service account lost editor access |
+| No email arriving | Check step4 logs for `step4: email send failed` | `GMAIL_APP_PASSWORD` wrong or has spaces; check spam folder |
+| Email sends but no content | Check step1/step2 status in email footer | Partial run — RSS or Claude issue |
 | Task not running | Trigger.dev → Schedules | Re-deploy: `npm run deploy:trigger` |
 
 ---
 
 *Built in May 2026 as part of the Agentic Workflow Phase 3 Automation project.*
+*Email delivery (Step 4) added May 2026 using Nodemailer + Gmail SMTP.*

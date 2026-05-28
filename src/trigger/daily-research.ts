@@ -1,6 +1,7 @@
 import { schedules, logger } from "@trigger.dev/sdk";
 import Anthropic from "@anthropic-ai/sdk";
 import { google } from "googleapis";
+import nodemailer from "nodemailer";
 
 // ─── RSS feed sources ─────────────────────────────────────────────────────────
 const NEWS_FEEDS = [
@@ -60,6 +61,7 @@ export const dailyResearch = schedules.task({
     let step1Status: "success" | "failed" = "failed";
     let step2Status: "success" | "failed" = "failed";
     let step3Status: "success" | "failed" = "failed";
+    let step4Status: "success" | "failed" = "failed";
 
     let newsContent = "";
     let stockContent = "";
@@ -236,12 +238,102 @@ ${stockContent.slice(0, 20000)}`;
       logger.error("step3: google sheets write failed", { error: String(err) });
     }
 
+    // ── STEP 4: Send Email Report ─────────────────────────────────────────────
+    try {
+      logger.info("step4: email send starting", { to: process.env.NOTIFY_EMAIL, overallStatus });
+
+      const statusLabel =
+        overallStatus === "complete" ? "Complete" :
+        overallStatus === "partial" ? "Partial" : "Failed";
+
+      const statusColor =
+        overallStatus === "complete" ? "#16a34a" :
+        overallStatus === "partial" ? "#d97706" : "#dc2626";
+
+      const formatSection = (text: string, fallback: string): string => {
+        if (!text.trim()) return `<p style="color:#6b7280;font-style:italic;">${fallback}</p>`;
+        return text.split("\n").filter((l) => l.trim())
+          .map((l) => `<p style="margin:0 0 8px 0;line-height:1.6;">${l.trim()}</p>`).join("");
+      };
+
+      const sourceLinks = allSourceUrls.length > 0
+        ? allSourceUrls.slice(0, 10).map((url) =>
+            `<li style="margin-bottom:4px;"><a href="${url}" style="color:#2563eb;text-decoration:none;font-size:13px;">${url.length > 70 ? url.slice(0, 70) + "…" : url}</a></li>`
+          ).join("")
+        : `<li style="color:#6b7280;font-style:italic;font-size:13px;">No sources captured</li>`;
+
+      const htmlBody = `<!DOCTYPE html>
+<html lang="en">
+<body style="margin:0;padding:0;background-color:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f3f4f6;padding:24px 0;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+        <tr><td style="background:linear-gradient(135deg,#1e293b 0%,#0f172a 100%);padding:28px 32px;">
+          <p style="margin:0 0 4px 0;color:#94a3b8;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;">Daily Research Report</p>
+          <h1 style="margin:0 0 12px 0;color:#f8fafc;font-size:22px;font-weight:700;">${runDate}</h1>
+          <span style="display:inline-block;background-color:${statusColor};color:#ffffff;font-size:12px;font-weight:600;padding:3px 10px;border-radius:20px;">${statusLabel}</span>
+        </td></tr>
+        <tr><td style="padding:28px 32px 0 32px;">
+          <h2 style="margin:0 0 16px 0;color:#0f172a;font-size:16px;font-weight:700;border-bottom:2px solid #e2e8f0;padding-bottom:8px;">AI News Today</h2>
+          <div style="color:#334155;font-size:14px;">${formatSection(newsSummary, "News synthesis did not complete for this run.")}</div>
+        </td></tr>
+        <tr><td style="padding:24px 32px 0 32px;">
+          <h2 style="margin:0 0 16px 0;color:#0f172a;font-size:16px;font-weight:700;border-bottom:2px solid #e2e8f0;padding-bottom:8px;">AI Stock Opportunities</h2>
+          <div style="color:#334155;font-size:14px;">${formatSection(stockSummary, "Stock synthesis did not complete for this run.")}</div>
+        </td></tr>
+        <tr><td style="padding:24px 32px 0 32px;">
+          <h2 style="margin:0 0 12px 0;color:#0f172a;font-size:16px;font-weight:700;border-bottom:2px solid #e2e8f0;padding-bottom:8px;">Sources</h2>
+          <ul style="margin:0;padding-left:16px;color:#334155;">${sourceLinks}</ul>
+        </td></tr>
+        <tr><td style="padding:24px 32px 28px 32px;">
+          <table width="100%" cellpadding="8" cellspacing="0" style="background:#f8fafc;border-radius:8px;">
+            <tr><td style="font-size:12px;color:#64748b;">
+              <strong style="color:#475569;">Pipeline:</strong>&nbsp;
+              RSS <span style="color:${step1Status === "success" ? "#16a34a" : "#dc2626"};font-weight:600;">${step1Status === "success" ? "✓" : "✗"}</span>&nbsp;&nbsp;
+              Claude <span style="color:${step2Status === "success" ? "#16a34a" : "#dc2626"};font-weight:600;">${step2Status === "success" ? "✓" : "✗"}</span>&nbsp;&nbsp;
+              Sheets <span style="color:${step3Status === "success" ? "#16a34a" : "#dc2626"};font-weight:600;">${step3Status === "success" ? "✓" : "✗"}</span>
+              &nbsp;&nbsp;|&nbsp;&nbsp;${allSourceUrls.length} sources
+            </td></tr>
+          </table>
+        </td></tr>
+        <tr><td style="background:#f1f5f9;padding:14px 32px;border-top:1px solid #e2e8f0;">
+          <p style="margin:0;color:#94a3b8;font-size:11px;text-align:center;">Phase 3 Automation · Scheduled daily at 07:00 UTC · Trigger.dev</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+      const transporter = nodemailer.createTransport({
+        service: "gmail",
+        auth: {
+          user: process.env.GMAIL_USER!,
+          pass: process.env.GMAIL_APP_PASSWORD!,
+        },
+      });
+
+      await transporter.sendMail({
+        from: `"Daily Research Bot" <${process.env.GMAIL_USER}>`,
+        to: process.env.NOTIFY_EMAIL!,
+        subject: `[${statusLabel}] AI Research Report — ${runDate}`,
+        html: htmlBody,
+      });
+
+      step4Status = "success";
+      logger.info("step4: email sent", { to: process.env.NOTIFY_EMAIL });
+    } catch (err) {
+      step4Status = "failed";
+      logger.error("step4: email send failed", { error: String(err) });
+    }
+
     // ── Final result ──────────────────────────────────────────────────────────
     const result = {
       date: runDate,
       step1Status,
       step2Status,
       step3Status,
+      step4Status,
       overallStatus,
       sourcesFound: allSourceUrls.length,
       newsSummaryLength: newsSummary.length,

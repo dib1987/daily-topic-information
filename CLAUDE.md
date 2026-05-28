@@ -1,3 +1,62 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+Phase 3 Automation — a daily AI research pipeline that fetches RSS feeds, synthesises them with Claude, and appends one row to a Google Sheet every morning. No server required; runs entirely on Trigger.dev's cloud infrastructure.
+
+## Commands
+
+```powershell
+npm run dev:trigger     # start local dev worker (connects to Trigger.dev cloud, hot-reloads)
+npm run deploy:trigger  # deploy task to Trigger.dev production
+```
+
+To test the scheduled task manually after starting dev mode: go to the Trigger.dev dashboard → Test → select `daily-research` → Run.
+
+## Architecture
+
+All logic lives in a single file: [src/trigger/daily-research.ts](src/trigger/daily-research.ts)
+
+The task runs on cron `0 7 * * *` (07:00 UTC / 12:30 PM IST). It is a `schedules.task`, not a plain `task`. Project config is in [trigger.config.ts](trigger.config.ts) — task dir is `./src/trigger`, `maxDuration` is 3600s.
+
+**4-step pipeline (all wrapped in independent try/catch):**
+
+1. **Step 1 — RSS fetch** — fetches 3 news feeds + 2 stock feeds in parallel via `Promise.allSettled`. Individual feed failures are logged and skipped; only fails the step if *all* feeds fail.
+2. **Step 2 — Claude synthesis** — sends raw feed content to `claude-sonnet-4-6`, parses the response into two sections (`SECTION 1 — AI NEWS TODAY` / `SECTION 2 — AI STOCK OPPORTUNITIES`). Skipped if Step 1 produced no content.
+3. **Step 3 — Google Sheets append** — always runs, writes one row (`Date | News | Stocks | Sources | Status`) to `Sheet1!A:E`. Writes `"failed"` status rows rather than skipping.
+4. **Step 4 — Email delivery** — always runs, sends a formatted HTML email via Nodemailer + Gmail SMTP. Subject: `[Complete/Partial/Failed] AI Research Report — YYYY-MM-DD`. Contains AI News, Stock Opportunities, source links, and a pipeline status footer (RSS ✓ Claude ✓ Sheets ✓).
+
+Overall status is `complete` / `partial` / `failed` based on step 1+2 outcomes. Steps 3 and 4 are tracked separately and always run.
+
+## Required Environment Variables
+
+| Variable | Purpose |
+|---|---|
+| `TRIGGER_SECRET_KEY` | Trigger.dev auth (set by CLI automatically in dev — not needed in dashboard) |
+| `ANTHROPIC_API_KEY` | Claude API |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | Full service account credentials JSON as a single-line string |
+| `GOOGLE_SHEET_ID` | `1ahOtDIkO1oA5SJ8EgxUI1AEJGQI_uOMwcpEwGt_wF0Q` |
+| `GMAIL_USER` | Gmail address used to send the daily report |
+| `GMAIL_APP_PASSWORD` | 16-char Gmail App Password (no spaces) — requires 2-Step Verification on the Google account |
+| `NOTIFY_EMAIL` | Email address that receives the daily report |
+
+For production, add all variables except `TRIGGER_SECRET_KEY` in the Trigger.dev dashboard → Environment Variables before deploying.
+
+**Gmail App Password:** Generate at myaccount.google.com → Security → 2-Step Verification → App passwords. Select "Mail" + "Other". Copy the 16-char code and remove spaces before saving.
+
+## Key Design Decisions
+
+- **RSS over scraping**: Firecrawl free tier silently returns `success=false`; RSS feeds are free with no rate limits.
+- **Claude output parsing**: The parser uses a case-insensitive split on `SECTION 2` with flexible regex to handle `**SECTION 2**`, `## SECTION 2`, or plain `SECTION 2` — Claude doesn't always match the instructed format exactly.
+- **Steps 3 and 4 always run**: A row with status `failed` and a failure notification email are more useful than silence. Never gate either on prior step success.
+- **`Promise.allSettled` for feeds**: A single unreachable feed should not block the others.
+- **Nodemailer + Gmail SMTP over alternatives**: `googleapis` Gmail API requires Google Workspace domain delegation (won't work with personal Gmail). Resend/SendGrid require new service signups. Nodemailer + App Password works with any Gmail account — zero new services.
+- **`@mendable/firecrawl-js` in package.json but unused**: Was the original scraping approach, abandoned when the free tier silently failed. Safe to remove if desired.
+
+---
+
 <!-- TRIGGER.DEV basic START -->
 # Trigger.dev Basic Tasks (v4)
 
